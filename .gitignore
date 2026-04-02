@@ -1,0 +1,30 @@
+# Binaries
+fog-of-war-clearer
+fog-of-war-clearer-server
+bin/
+
+# Build output
+dist/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Test artefacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Temporary files
+/tmp/
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
