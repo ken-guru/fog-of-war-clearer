@@ -21,6 +21,9 @@ const (
 	LanguageJavaScript Language = "javascript"
 	LanguageJava       Language = "java"
 	LanguageKotlin     Language = "kotlin"
+	LanguageGo         Language = "go"
+	LanguageRust       Language = "rust"
+	LanguagePHP        Language = "php"
 )
 
 // CheckStatus indicates whether a check succeeded or failed.

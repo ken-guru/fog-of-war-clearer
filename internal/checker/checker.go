@@ -10,6 +10,7 @@ import (
 
 	"github.com/ken-guru/fog-of-war-clearer/internal/coverage"
 	"github.com/ken-guru/fog-of-war-clearer/internal/fetcher"
+	"github.com/ken-guru/fog-of-war-clearer/internal/planner"
 	"github.com/ken-guru/fog-of-war-clearer/internal/runner"
 	"github.com/ken-guru/fog-of-war-clearer/pkg/report"
 )
@@ -32,19 +33,29 @@ type Checker struct {
 	fetcher  *fetcher.Fetcher
 	runner   *runner.Runner
 	analyzer *coverage.Analyzer
+	planner  planner.Planner
 }
 
-// New creates a Checker.  It returns an error if the Docker client cannot be
-// initialised.
-func New() (*Checker, error) {
+// New creates a Checker.  If llmCfg is non-nil an LLM-backed planner is used;
+// otherwise analysis falls back to deterministic static plans.
+func New(llmCfg *planner.LLMConfig) (*Checker, error) {
 	r, err := runner.New()
 	if err != nil {
 		return nil, fmt.Errorf("initialise docker runner: %w", err)
 	}
+
+	var p planner.Planner
+	if llmCfg != nil {
+		p = planner.NewLLMPlanner(r.Client(), *llmCfg)
+	} else {
+		p = &planner.StaticPlanner{}
+	}
+
 	return &Checker{
 		fetcher:  fetcher.New(),
 		runner:   r,
 		analyzer: coverage.NewAnalyzer(r),
+		planner:  p,
 	}, nil
 }
 
@@ -58,11 +69,13 @@ func (c *Checker) Run(ctx context.Context, req Request) (*report.Report, error) 
 
 	// Clone the repository.  The PAT is used here only; it is never forwarded
 	// to the Docker containers.
+	fmt.Fprintf(os.Stderr, "[fog] cloning %s...\n", req.Repo)
 	repoDir, err := c.fetcher.Clone(req.PAT, req.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("clone repo: %w", err)
 	}
 	defer os.RemoveAll(repoDir)
+	fmt.Fprintf(os.Stderr, "[fog] clone complete\n")
 
 	rpt := &report.Report{
 		Repo:  req.Repo,
@@ -70,6 +83,7 @@ func (c *Checker) Run(ctx context.Context, req Request) (*report.Report, error) 
 	}
 
 	for _, checkType := range checks {
+		fmt.Fprintf(os.Stderr, "[fog] running check: %s\n", checkType)
 		result := c.runCheck(ctx, checkType, repoDir)
 		rpt.Checks = append(rpt.Checks, result)
 	}
@@ -93,14 +107,25 @@ func (c *Checker) runCheck(ctx context.Context, checkType report.CheckType, repo
 func (c *Checker) runCoverageCheck(ctx context.Context, repoDir string) report.CheckResult {
 	result := report.CheckResult{Type: report.CheckTestCoverage}
 
+	fmt.Fprintf(os.Stderr, "[fog] detecting languages...\n")
 	langs := coverage.DetectLanguages(repoDir)
 	if len(langs) == 0 {
+		fmt.Fprintf(os.Stderr, "[fog] no supported languages detected\n")
 		result.Status = report.CheckStatusSkipped
 		result.Error = "no supported languages detected in repository"
 		return result
 	}
+	fmt.Fprintf(os.Stderr, "[fog] detected languages: %v\n", langs)
 
-	metrics, err := c.analyzer.Analyze(ctx, repoDir, langs)
+	fmt.Fprintf(os.Stderr, "[fog] planning container configuration...\n")
+	plans, err := c.planner.Plan(ctx, repoDir, langs)
+	if err != nil {
+		result.Status = report.CheckStatusFailure
+		result.Error = fmt.Sprintf("planning failed: %s", err)
+		return result
+	}
+
+	metrics, err := c.analyzer.AnalyzeWithPlans(ctx, repoDir, plans)
 	if err != nil {
 		result.Status = report.CheckStatusFailure
 		result.Error = err.Error()

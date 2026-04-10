@@ -29,6 +29,18 @@ func DetectLanguages(dir string) []report.Language {
 		found = append(found, report.LanguageJava)
 	}
 
+	if hasFile(dir, "go.mod") {
+		found = append(found, report.LanguageGo)
+	}
+
+	if hasFile(dir, "Cargo.toml") {
+		found = append(found, report.LanguageRust)
+	}
+
+	if hasFile(dir, "composer.json") {
+		found = append(found, report.LanguagePHP)
+	}
+
 	return found
 }
 

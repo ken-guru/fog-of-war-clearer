@@ -1,6 +1,7 @@
 # Binaries
 fog-of-war-clearer
 fog-of-war-clearer-server
+cli
 bin/
 
 # Build output
@@ -20,6 +21,13 @@ coverage.txt
 /tmp/
 *.tmp
 
+# Analysis results (default directory written by the CLI)
+results/
+
+# Belt-and-suspenders: any JSON file dropped at the workspace root
+# (e.g. from a stale binary that predates the results/ default).
+/*.json
+
 # IDE
 .idea/
 .vscode/
@@ -28,3 +36,8 @@ coverage.txt
 
 # macOS
 .DS_Store
+
+# Environment variables (secrets)
+.env
+.env.local
+*.env

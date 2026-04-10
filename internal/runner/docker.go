@@ -18,24 +18,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 const (
 	// containerTimeout is the maximum time a container is allowed to run.
-	containerTimeout = 10 * time.Minute
+	containerTimeout = 20 * time.Minute
 
 	// memoryLimit is the maximum memory a container may use.
-	memoryLimit int64 = 512 * 1024 * 1024 // 512 MiB
+	memoryLimit int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
 
-	// cpuPeriod / cpuQuota gives 1 vCPU.
+	// cpuPeriod / cpuQuota gives 2 vCPUs.
 	cpuPeriod int64 = 100_000
-	cpuQuota  int64 = 100_000
+	cpuQuota  int64 = 200_000
 )
 
 // Runner executes commands inside Docker containers.
@@ -43,9 +46,49 @@ type Runner struct {
 	cli *client.Client
 }
 
+// Client returns the underlying Docker client.
+func (r *Runner) Client() *client.Client {
+	return r.cli
+}
+
 // New creates a Runner using the Docker environment variables (DOCKER_HOST etc.).
+// On Unix systems, if DOCKER_HOST is not set, it probes common socket paths
+// and uses the first one that exists.  On Windows the Docker client default is
+// used so that the npipe transport is not overridden.
 func New() (*Runner, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	dockerHost := os.Getenv("DOCKER_HOST")
+
+	// Only probe Unix socket paths on non-Windows platforms.
+	if dockerHost == "" && runtime.GOOS != "windows" {
+		socketPaths := []string{
+			"/var/run/docker.sock", // Linux default
+		}
+		if home := os.Getenv("HOME"); home != "" {
+			socketPaths = append(socketPaths, filepath.Join(home, ".docker/run/docker.sock")) // macOS Docker Desktop
+		}
+
+		for _, socketPath := range socketPaths {
+			if _, err := os.Stat(socketPath); err == nil {
+				dockerHost = "unix://" + socketPath
+				break
+			}
+		}
+		// If no existing socket was found, leave dockerHost empty so the
+		// Docker client can use its own platform default.
+	}
+
+	// Always include FromEnv so that DOCKER_TLS_VERIFY, DOCKER_CERT_PATH,
+	// and DOCKER_API_VERSION are honoured.  WithHost overrides only the host
+	// portion when we have detected (or been given) a socket path.
+	opts := []client.Opt{
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
+	}
+	if dockerHost != "" {
+		opts = append(opts, client.WithHost(dockerHost))
+	}
+
+	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
@@ -114,7 +157,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 
 	hostCfg := &container.HostConfig{
 		Mounts:      mounts,
-		NetworkMode: "none", // no outbound network access – the PAT must never reach the container
+		NetworkMode: container.NetworkMode("bridge"), // allow network for package installation; PAT stays on host
 		AutoRemove:  false,  // we remove manually to collect logs first
 		Resources: container.Resources{
 			Memory:    memoryLimit,
@@ -136,6 +179,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 		_ = r.cli.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
 	}()
 
+	fmt.Fprintf(os.Stderr, "[fog] starting container (%s)...\n", opts.Image)
 	if err := r.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("start container: %w", err)
 	}
@@ -151,8 +195,11 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 	}
 	defer logStream.Close()
 
+	// stdcopy.StdCopy demultiplexes the Docker stream (stripping binary headers)
+	// and writes container stdout+stderr to both the capture buffer and host stderr.
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, logStream); err != nil && ctx.Err() == nil {
+	w := io.MultiWriter(&buf, os.Stderr)
+	if _, err := stdcopy.StdCopy(w, w, logStream); err != nil && ctx.Err() == nil {
 		return "", fmt.Errorf("read container output: %w", err)
 	}
 
@@ -165,7 +212,11 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 		}
 	case status := <-statusCh:
 		if status.StatusCode != 0 {
-			return buf.String(), fmt.Errorf("container exited with status %d", status.StatusCode)
+			output := buf.String()
+			if output != "" {
+				return output, fmt.Errorf("container exited with status %d:\n%s", status.StatusCode, output)
+			}
+			return "", fmt.Errorf("container exited with status %d (no output)", status.StatusCode)
 		}
 	case <-ctx.Done():
 		return buf.String(), fmt.Errorf("container timed out after %s", containerTimeout)
@@ -188,11 +239,13 @@ func (r *Runner) pullIfMissing(ctx context.Context, imageName string) error {
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "[fog] pulling docker image %s...\n", imageName)
 	out, err := r.cli.ImagePull(ctx, imageName, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", imageName, err)
 	}
 	defer out.Close()
 	_, _ = io.Copy(io.Discard, out) // consume to completion
+	fmt.Fprintf(os.Stderr, "[fog] image %s ready\n", imageName)
 	return nil
 }
