@@ -31,6 +31,15 @@ More checks can be added as new `CheckType` values in `pkg/report/report.go`.
 
 ---
 
+## Robustness & compatibility
+
+- **npm lockfile fallback** — Repos without `package-lock.json` or `npm-shrinkwrap.json` use `npm install` instead of `npm ci`, ensuring analysis works on any Node.js project.
+- **Vitest coverage fix** — Vitest requires `@vitest/coverage-v8` to be explicitly installed for coverage reporting; the tool detects vitest and auto-installs it.
+- **Rust version compatibility** — Uses `rust:1-slim` (latest stable) and `cargo install --locked` for pinned dependency versions, ensuring compatibility across Rust versions.
+- **Static planner fallback** — When the LLM planner is unavailable or returns invalid output, deterministic built-in defaults guarantee analysis always succeeds.
+
+---
+
 ## Quick start
 
 ### Prerequisites
@@ -52,16 +61,16 @@ go build -o fog-of-war-clearer-server ./cmd/server
 ### CLI usage
 
 ```bash
-# Analyse a repository and print JSON to stdout
+# Analyse a repository (results saved to results/owner-repo_<timestamp>.json)
 ./fog-of-war-clearer analyze \
   --pat ghp_XXXX \
   --repo owner/repo-name
 
-# Save results to a file
+# Save results to a custom location
 ./fog-of-war-clearer analyze \
   --pat ghp_XXXX \
   --repo owner/repo-name \
-  --output result.json
+  --output custom/path.json
 
 # Specify which checks to run (comma-separated)
 ./fog-of-war-clearer analyze \
@@ -69,6 +78,10 @@ go build -o fog-of-war-clearer-server ./cmd/server
   --repo owner/repo-name \
   --checks test-coverage
 ```
+
+**Default output behavior:**
+By default, results are written to `results/<owner>-<repo>_<ISO8601-timestamp>.json`.
+Timestamps allow time-series comparison of coverage trends. The `results/` directory is gitignored.
 
 ### API server usage
 
@@ -123,7 +136,7 @@ GET /healthz
 }
 ```
 
-`status` is one of `success`, `failure`, or `skipped`.  
+`status` is one of `success`, `failure`, or `skipped`.
 On failure, an `error` field is present with a sanitised message (PAT redacted).
 
 ---
@@ -215,3 +228,8 @@ defaults automatically.
 
 The recommended model for this task is `qwen2.5:1.5b` (~900 MB), which is small
 enough to run on a laptop CPU.
+
+**Parallel execution:**
+Multiple `fog-of-war-clearer` processes can run concurrently on different repositories.
+Each run is fully isolated — containers, networks, and temporary directories are unique per run.
+The shared model volume uses a check-before-pull optimization: after the first run, subsequent runs find the cached model and skip the pull entirely, enabling full parallelism with zero coordination overhead.

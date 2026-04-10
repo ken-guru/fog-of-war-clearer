@@ -21,6 +21,9 @@ coverage.txt
 /tmp/
 *.tmp
 
+# Analysis results
+results/
+
 # IDE
 .idea/
 .vscode/

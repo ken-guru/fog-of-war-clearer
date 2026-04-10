@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -81,7 +83,7 @@ func newAnalyzeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "analyze",
 		Short: "Run analysis checks against a GitHub repository",
-		Example: `  # Run default test-coverage check and save to owner-name.json
+		Example: `  # Run default test-coverage check and save to results/owner-name_<timestamp>.json
   fog-of-war-clearer analyze --pat <PAT> --repo owner/name
 
   # Run test-coverage and save results to a custom file
@@ -119,7 +121,7 @@ func newAnalyzeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&pat, "pat", "", "GitHub Personal Access Token for cloning the repository (can also use FOG_PAT env var)")
 	cmd.Flags().StringVar(&repo, "repo", "", "Repository to analyse in owner/name format (can also use FOG_REPO env var)")
 	cmd.Flags().StringSliceVar(&checks, "checks", []string{"test-coverage"}, "Comma-separated list of checks to run (can also use FOG_CHECKS env var)")
-	cmd.Flags().StringVar(&output, "output", "", "Write JSON output to this file (default: <owner>-<repo>.json)")
+	cmd.Flags().StringVar(&output, "output", "", "Write JSON output to this file (default: results/<owner>-<repo>_<timestamp>.json)")
 
 	return cmd
 }
@@ -163,8 +165,18 @@ func runAnalyze(cmd *cobra.Command, pat, repo string, checkNames []string, outpu
 	}
 
 	if outputFile == "" {
-		// Generate default filename from repo (owner/repo-name → owner-repo-name.json)
-		outputFile = strings.ToLower(strings.ReplaceAll(repo, "/", "-")) + ".json"
+		// Generate default filename from repo (owner/repo-name → owner-repo-name_2026-04-10T11-57-43Z.json)
+		// Include timestamp for time-series analysis. Place in results/ directory (gitignored).
+		timestamp := time.Now().UTC().Format("2006-01-02T15-04-05Z")
+		filename := strings.ToLower(strings.ReplaceAll(repo, "/", "-")) + "_" + timestamp + ".json"
+		outputFile = filepath.Join("results", filename)
+	}
+
+	// Create results directory if it doesn't exist.
+	if dir := filepath.Dir(outputFile); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
 	}
 
 	if err := os.WriteFile(outputFile, data, 0o600); err != nil {
