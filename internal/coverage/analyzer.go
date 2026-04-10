@@ -3,6 +3,7 @@ package coverage
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/ken-guru/fog-of-war-clearer/internal/runner"
 	"github.com/ken-guru/fog-of-war-clearer/pkg/report"
@@ -27,15 +28,16 @@ var scripts = map[report.Language][]string{
 		// 1. Copy repo to writable workspace
 		// 2. Install deps without running lifecycle scripts (prevents arbitrary code execution)
 		// 3. Run jest with json-summary reporter; fall back to vitest
+		// --maxWorkers=2 and --forceExit prevent OOM and hanging workers inside the resource-limited container
 		`set -e
 cp -r /repo/. /workspace/
 cd /workspace
 npm ci --ignore-scripts --no-fund --no-audit 2>&1
 if npx --no -- jest --version > /dev/null 2>&1; then
-  npx jest --coverage --coverageReporters=json-summary --passWithNoTests 2>&1
+  npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 elif npx --no -- vitest --version > /dev/null 2>&1; then
-  npx vitest run --coverage 2>&1
+  npx vitest run --coverage --pool=threads --poolOptions.threads.maxThreads=2 2>&1
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 else
   echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
@@ -48,10 +50,10 @@ cp -r /repo/. /workspace/
 cd /workspace
 npm ci --ignore-scripts --no-fund --no-audit 2>&1
 if npx --no -- jest --version > /dev/null 2>&1; then
-  npx jest --coverage --coverageReporters=json-summary --passWithNoTests 2>&1
+  npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 elif npx --no -- vitest --version > /dev/null 2>&1; then
-  npx vitest run --coverage 2>&1
+  npx vitest run --coverage --pool=threads --poolOptions.threads.maxThreads=2 2>&1
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 else
   echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
@@ -99,10 +101,12 @@ func (a *Analyzer) Analyze(ctx context.Context, repoDir string, languages []repo
 	var results []report.CoverageMetrics
 
 	for _, lang := range languages {
+		fmt.Fprintf(os.Stderr, "[fog] analysing %s test coverage...\n", lang)
 		metrics, err := a.analyzeLanguage(ctx, repoDir, lang)
 		if err != nil {
 			return results, fmt.Errorf("coverage analysis for %s: %w", lang, err)
 		}
+		fmt.Fprintf(os.Stderr, "[fog] %s coverage analysis complete\n", lang)
 		results = append(results, metrics)
 	}
 	return results, nil

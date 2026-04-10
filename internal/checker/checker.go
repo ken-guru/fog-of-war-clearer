@@ -58,11 +58,13 @@ func (c *Checker) Run(ctx context.Context, req Request) (*report.Report, error) 
 
 	// Clone the repository.  The PAT is used here only; it is never forwarded
 	// to the Docker containers.
+	fmt.Fprintf(os.Stderr, "[fog] cloning %s...\n", req.Repo)
 	repoDir, err := c.fetcher.Clone(req.PAT, req.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("clone repo: %w", err)
 	}
 	defer os.RemoveAll(repoDir)
+	fmt.Fprintf(os.Stderr, "[fog] clone complete\n")
 
 	rpt := &report.Report{
 		Repo:  req.Repo,
@@ -70,6 +72,7 @@ func (c *Checker) Run(ctx context.Context, req Request) (*report.Report, error) 
 	}
 
 	for _, checkType := range checks {
+		fmt.Fprintf(os.Stderr, "[fog] running check: %s\n", checkType)
 		result := c.runCheck(ctx, checkType, repoDir)
 		rpt.Checks = append(rpt.Checks, result)
 	}
@@ -93,12 +96,15 @@ func (c *Checker) runCheck(ctx context.Context, checkType report.CheckType, repo
 func (c *Checker) runCoverageCheck(ctx context.Context, repoDir string) report.CheckResult {
 	result := report.CheckResult{Type: report.CheckTestCoverage}
 
+	fmt.Fprintf(os.Stderr, "[fog] detecting languages...\n")
 	langs := coverage.DetectLanguages(repoDir)
 	if len(langs) == 0 {
+		fmt.Fprintf(os.Stderr, "[fog] no supported languages detected\n")
 		result.Status = report.CheckStatusSkipped
 		result.Error = "no supported languages detected in repository"
 		return result
 	}
+	fmt.Fprintf(os.Stderr, "[fog] detected languages: %v\n", langs)
 
 	metrics, err := c.analyzer.Analyze(ctx, repoDir, langs)
 	if err != nil {

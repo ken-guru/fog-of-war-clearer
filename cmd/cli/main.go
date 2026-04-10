@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,10 +17,43 @@ import (
 )
 
 func main() {
+	// Try to load .env file if it exists.
+	_ = loadEnvFile(".env")
+
 	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// loadEnvFile reads a simple key=value .env file and sets environment variables.
+// Lines starting with # are treated as comments. Empty lines are ignored.
+func loadEnvFile(filename string) error {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil // File doesn't exist, which is fine
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments.
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Parse key=value.
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			// Don't override existing environment variables.
+			if os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
+		}
+	}
+	return scanner.Err()
 }
 
 func newRootCmd() *cobra.Command {
@@ -55,17 +89,36 @@ func newAnalyzeCmd() *cobra.Command {
   # Specify checks explicitly
   fog-of-war-clearer analyze --pat <PAT> --repo owner/name --checks test-coverage`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load defaults from environment variables if flags are not provided.
+			if pat == "" {
+				pat = os.Getenv("FOG_PAT")
+			}
+			if repo == "" {
+				repo = os.Getenv("FOG_REPO")
+			}
+			if len(checks) == 1 && checks[0] == "test-coverage" {
+				// Default check was not explicitly overridden
+				if envChecks := os.Getenv("FOG_CHECKS"); envChecks != "" {
+					checks = strings.Split(envChecks, ",")
+				}
+			}
+
+			// Validate required arguments after loading from environment.
+			if pat == "" {
+				return fmt.Errorf("--pat or FOG_PAT environment variable is required")
+			}
+			if repo == "" {
+				return fmt.Errorf("--repo or FOG_REPO environment variable is required")
+			}
+
 			return runAnalyze(cmd, pat, repo, checks, output)
 		},
 	}
 
-	cmd.Flags().StringVar(&pat, "pat", "", "GitHub Personal Access Token for cloning the repository (required)")
-	cmd.Flags().StringVar(&repo, "repo", "", "Repository to analyse in owner/name format (required)")
-	cmd.Flags().StringSliceVar(&checks, "checks", []string{"test-coverage"}, "Comma-separated list of checks to run")
+	cmd.Flags().StringVar(&pat, "pat", "", "GitHub Personal Access Token for cloning the repository (can also use FOG_PAT env var)")
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository to analyse in owner/name format (can also use FOG_REPO env var)")
+	cmd.Flags().StringSliceVar(&checks, "checks", []string{"test-coverage"}, "Comma-separated list of checks to run (can also use FOG_CHECKS env var)")
 	cmd.Flags().StringVar(&output, "output", "", "Write JSON output to this file (default: stdout)")
-
-	_ = cmd.MarkFlagRequired("pat")
-	_ = cmd.MarkFlagRequired("repo")
 
 	return cmd
 }
