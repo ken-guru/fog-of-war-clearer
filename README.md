@@ -16,7 +16,8 @@ that repository code never runs with access to your Personal Access Token (PAT).
 | **Sandboxed execution** | Every check runs in a Docker container with no network access and strict resource limits |
 | **PAT safety** | The PAT is used only for `git clone` on the host; it is _never_ passed to containers and is scrubbed from all error messages and log output |
 | **Structured JSON output** | Both CLI and API return the same `Report` JSON schema |
-| **Multi-language coverage** | TypeScript · JavaScript · Java · Kotlin |
+| **Multi-language coverage** | TypeScript · JavaScript · Java · Kotlin · Go · Rust · PHP |
+| **LLM-powered planning** | Optional containerised Ollama agent inspects repo config files to choose the right Docker image and test commands |
 
 ---
 
@@ -135,10 +136,10 @@ On failure, an `error` field is present with a sanitised message (PAT redacted).
 - Any error message or log line that might contain the PAT is scrubbed before it is returned or written anywhere.
 
 ### Sandboxed containers
-- Network is disabled (`--network=none`) so containers cannot exfiltrate secrets.
+- Network mode is `bridge` to allow package installation; the PAT is never forwarded to containers.
 - The repository is mounted **read-only** at `/repo`.
 - A separate, writable workspace directory is mounted at `/workspace`; it is deleted after the container exits.
-- Containers run with `no-new-privileges`, 512 MiB memory cap, and 1 CPU quota.
+- Containers run with `no-new-privileges`, 2 GiB memory cap, and 2 CPU quota.
 - Containers are force-removed after they exit.
 
 ### Input validation
@@ -160,6 +161,7 @@ On failure, an `error` field is present with a sanitised message (PAT redacted).
 │   ├── checker/      # Analysis pipeline orchestrator
 │   ├── coverage/     # Language detection + coverage parsers + analyzer
 │   ├── fetcher/      # Git clone with PAT
+│   ├── planner/      # LLM + static planners (Docker image & script selection)
 │   └── runner/       # Docker sandbox runner
 └── pkg/
     └── report/       # Shared JSON output types
@@ -179,9 +181,33 @@ Docker images are available locally.
 
 ---
 
-## Environment variables (server)
+## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `8080` | TCP port the HTTP server listens on |
+| `FOG_PAT` | _(none)_ | GitHub Personal Access Token (CLI also accepts `--pat`) |
+| `FOG_REPO` | _(none)_ | Repository to analyse (CLI also accepts `--repo`) |
+| `FOG_CHECKS` | `test-coverage` | Comma-separated checks to run |
+| `FOG_LLM_MODEL` | _(unset)_ | Ollama model tag — set to enable the LLM planner (e.g. `qwen2.5:1.5b`) |
+| `FOG_LLM_OLLAMA_IMAGE` | `ollama/ollama:latest` | Docker image for the Ollama server container |
+| `PORT` | `8080` | TCP port the HTTP server listens on (server only) |
 | `DOCKER_HOST` | _(system default)_ | Override the Docker socket path |
+
+### LLM planner
+
+When `FOG_LLM_MODEL` is set, the tool spins up two containers on an ephemeral
+Docker bridge network before running the analysis:
+
+1. **Ollama container** — runs the LLM inference server.  Model weights are
+   cached in a Docker volume (`fog-ollama-models`) so they are only downloaded
+   on the first run.
+2. **Script container** — a lightweight Alpine container that reads the repo's
+   config files and queries Ollama to determine the optimal Docker image and
+   test commands for each detected language.
+
+Both containers are torn down after planning completes.  If the LLM is
+unavailable or returns an invalid plan, the tool falls back to built-in static
+defaults automatically.
+
+The recommended model for this task is `qwen2.5:1.5b` (~900 MB), which is small
+enough to run on a laptop CPU.

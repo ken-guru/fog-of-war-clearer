@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ken-guru/fog-of-war-clearer/internal/checker"
+	"github.com/ken-guru/fog-of-war-clearer/internal/planner"
 	"github.com/ken-guru/fog-of-war-clearer/pkg/report"
 )
 
@@ -130,7 +131,18 @@ func runAnalyze(cmd *cobra.Command, pat, repo string, checkNames []string, outpu
 		return err
 	}
 
-	c, err := checker.New()
+	// Build LLM config from environment variables.  If FOG_LLM_MODEL is set
+	// (or defaulted), enable the LLM planner; otherwise use static fallback.
+	var llmCfg *planner.LLMConfig
+	if model := os.Getenv("FOG_LLM_MODEL"); model != "" {
+		cfg := planner.LLMConfig{Model: model}
+		if img := os.Getenv("FOG_LLM_OLLAMA_IMAGE"); img != "" {
+			cfg.OllamaImage = img
+		}
+		llmCfg = &cfg
+	}
+
+	c, err := checker.New(llmCfg)
 	if err != nil {
 		return fmt.Errorf("initialise checker: %w", err)
 	}

@@ -45,6 +45,11 @@ type Runner struct {
 	cli *client.Client
 }
 
+// Client returns the underlying Docker client.
+func (r *Runner) Client() *client.Client {
+	return r.cli
+}
+
 // New creates a Runner using the Docker environment variables (DOCKER_HOST etc.).
 // On macOS, if DOCKER_HOST is not set and the default socket does not exist,
 // it auto-detects the Docker Desktop socket.

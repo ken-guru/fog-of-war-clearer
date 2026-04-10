@@ -14,6 +14,7 @@ import (
 
 	"github.com/ken-guru/fog-of-war-clearer/internal/api"
 	"github.com/ken-guru/fog-of-war-clearer/internal/checker"
+	"github.com/ken-guru/fog-of-war-clearer/internal/planner"
 )
 
 func main() {
@@ -26,7 +27,17 @@ func main() {
 func run() error {
 	addr := listenAddr()
 
-	c, err := checker.New()
+	// Build LLM config from environment variables.
+	var llmCfg *planner.LLMConfig
+	if model := os.Getenv("FOG_LLM_MODEL"); model != "" {
+		cfg := planner.LLMConfig{Model: model}
+		if img := os.Getenv("FOG_LLM_OLLAMA_IMAGE"); img != "" {
+			cfg.OllamaImage = img
+		}
+		llmCfg = &cfg
+	}
+
+	c, err := checker.New(llmCfg)
 	if err != nil {
 		return fmt.Errorf("initialise checker: %w", err)
 	}
