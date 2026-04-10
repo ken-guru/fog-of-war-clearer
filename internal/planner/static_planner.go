@@ -14,7 +14,7 @@ var staticImages = map[report.Language]string{
 	report.LanguageJava:       "maven:3.9-eclipse-temurin-21",
 	report.LanguageKotlin:     "gradle:8.5-jdk21",
 	report.LanguageGo:         "golang:1.24-alpine",
-	report.LanguageRust:       "rust:1.85-slim",
+	report.LanguageRust:       "rust:1-slim",
 	report.LanguagePHP:        "php:8.3-cli",
 }
 
@@ -28,7 +28,11 @@ var staticScripts = map[report.Language][]string{
 		`set -e
 cp -r /repo/. /workspace/
 cd /workspace
-npm ci --ignore-scripts --no-fund --no-audit 2>&1
+if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+  npm ci --ignore-scripts --no-fund --no-audit 2>&1
+else
+  npm install --ignore-scripts --no-fund --no-audit 2>&1
+fi
 if npx --no -- jest --version > /dev/null 2>&1; then
   npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
   echo '---COVERAGE_JSON---'
@@ -48,7 +52,11 @@ fi`,
 		`set -e
 cp -r /repo/. /workspace/
 cd /workspace
-npm ci --ignore-scripts --no-fund --no-audit 2>&1
+if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+  npm ci --ignore-scripts --no-fund --no-audit 2>&1
+else
+  npm install --ignore-scripts --no-fund --no-audit 2>&1
+fi
 if npx --no -- jest --version > /dev/null 2>&1; then
   npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
   echo '---COVERAGE_JSON---'
@@ -103,7 +111,7 @@ printf '{"total":{"lines":{"pct":%s},"statements":{"pct":%s},"branches":{"pct":0
 		`set -e
 cp -r /repo/. /workspace/
 cd /workspace
-cargo install cargo-tarpaulin 2>&1
+cargo install cargo-tarpaulin --locked 2>&1
 cargo tarpaulin --out Json --output-dir coverage 2>&1
 # Extract the line coverage percentage.
 pct=$(grep -oE '"covered_percent":[0-9.]+' coverage/tarpaulin-report.json | head -1 | cut -d: -f2)
