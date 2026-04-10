@@ -13,7 +13,7 @@ that repository code never runs with access to your Personal Access Token (PAT).
 |---|---|
 | **CLI** | `fog-of-war-clearer analyze --pat <PAT> --repo owner/name` |
 | **REST API** | `POST /api/v1/analyze` |
-| **Sandboxed execution** | Every check runs in a Docker container with no network access and strict resource limits |
+| **Sandboxed execution** | Every check runs in a sandboxed Docker container with bridged networking and strict resource limits |
 | **PAT safety** | The PAT is used only for `git clone` on the host; it is _never_ passed to containers and is scrubbed from all error messages and log output |
 | **Structured JSON output** | Both CLI and API return the same `Report` JSON schema |
 | **Multi-language coverage** | TypeScript · JavaScript · Java · Kotlin · Go · Rust · PHP |
@@ -201,9 +201,13 @@ Docker bridge network before running the analysis:
 1. **Ollama container** — runs the LLM inference server.  Model weights are
    cached in a Docker volume (`fog-ollama-models`) so they are only downloaded
    on the first run.
-2. **Script container** — a lightweight Alpine container that reads the repo's
-   config files and queries Ollama to determine the optimal Docker image and
-   test commands for each detected language.
+2. **Script container** — a lightweight Alpine helper container used to query
+   the Ollama server during planning.
+
+The planner reads the cloned repository's config files on the host, sends the
+relevant context to Ollama via the helper container, and uses the response to
+determine the optimal Docker image and test commands for each detected
+language.
 
 Both containers are torn down after planning completes.  If the LLM is
 unavailable or returns an invalid plan, the tool falls back to built-in static

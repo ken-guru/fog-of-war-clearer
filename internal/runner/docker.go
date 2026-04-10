@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -51,16 +52,16 @@ func (r *Runner) Client() *client.Client {
 }
 
 // New creates a Runner using the Docker environment variables (DOCKER_HOST etc.).
-// On macOS, if DOCKER_HOST is not set and the default socket does not exist,
-// it auto-detects the Docker Desktop socket.
+// On Unix systems, if DOCKER_HOST is not set, it probes common socket paths
+// and uses the first one that exists.  On Windows the Docker client default is
+// used so that the npipe transport is not overridden.
 func New() (*Runner, error) {
 	dockerHost := os.Getenv("DOCKER_HOST")
 
-	// If DOCKER_HOST is not set, determine which socket path to use.
-	if dockerHost == "" {
-		// Try common socket locations in order.
+	// Only probe Unix socket paths on non-Windows platforms.
+	if dockerHost == "" && runtime.GOOS != "windows" {
 		socketPaths := []string{
-			"/var/run/docker.sock",                                    // Linux default
+			"/var/run/docker.sock",                                       // Linux default
 			filepath.Join(os.Getenv("HOME"), ".docker/run/docker.sock"), // macOS Docker Desktop
 		}
 
@@ -70,11 +71,8 @@ func New() (*Runner, error) {
 				break
 			}
 		}
-
-		// If no socket found and HOME is available, construct the macOS path explicitly
-		if dockerHost == "" && os.Getenv("HOME") != "" {
-			dockerHost = "unix://" + filepath.Join(os.Getenv("HOME"), ".docker/run/docker.sock")
-		}
+		// If no existing socket was found, leave dockerHost empty so the
+		// Docker client can use its own platform default.
 	}
 
 	var opts []client.Opt

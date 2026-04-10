@@ -182,18 +182,17 @@ func (p *LLMPlanner) startOllama(ctx context.Context, networkID string) (string,
 			CPUQuota:  200_000, // 2 vCPUs
 		},
 	}
-	netCfg := &network.NetworkingConfig{
-		EndpointsConfig: map[string]*network.EndpointSettings{
-			"fog-planner": {
-				NetworkID: networkID,
-				Aliases:   []string{"fog-ollama"},
-			},
-		},
-	}
 
-	resp, err := p.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, "")
+	resp, err := p.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
 		return "", fmt.Errorf("create ollama container: %w", err)
+	}
+
+	if err := p.cli.NetworkConnect(ctx, networkID, resp.ID, &network.EndpointSettings{
+		Aliases: []string{"fog-ollama"},
+	}); err != nil {
+		_ = p.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		return "", fmt.Errorf("connect ollama container to network: %w", err)
 	}
 
 	if err := p.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
@@ -253,16 +252,32 @@ func (p *LLMPlanner) pullModel(ctx context.Context, ollamaID, networkID string) 
 func (p *LLMPlanner) queryOllama(ctx context.Context, repoDir, networkID, prompt string) (string, error) {
 	fmt.Fprintf(os.Stderr, "[fog] querying LLM for analysis plan...\n")
 
-	// Escape the prompt for safe embedding in a shell heredoc.
-	escapedPrompt := strings.ReplaceAll(prompt, `\`, `\\`)
-	escapedPrompt = strings.ReplaceAll(escapedPrompt, `"`, `\"`)
-	escapedPrompt = strings.ReplaceAll(escapedPrompt, "`", "` + \"`\" + `")
+	// Build the request payload as a Go struct and marshal to JSON so that
+	// special characters (newlines, quotes, etc.) are properly escaped.
+	type generateRequest struct {
+		Model  string `json:"model"`
+		Prompt string `json:"prompt"`
+		Stream bool   `json:"stream"`
+		Format string `json:"format"`
+	}
+	payloadBytes, err := json.Marshal(generateRequest{
+		Model:  p.config.Model,
+		Prompt: prompt,
+		Stream: false,
+		Format: "json",
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal ollama request: %w", err)
+	}
 
-	payload := fmt.Sprintf(`{"model":"%s","prompt":"%s","stream":false,"format":"json"}`,
-		p.config.Model, escapedPrompt)
+	// The JSON payload is embedded in a shell single-quoted string, so the
+	// only character that needs escaping for the shell is a single quote.
+	shellPayload := strings.ReplaceAll(string(payloadBytes), "'", `'\''`)
 
-	script := fmt.Sprintf(`wget -q -O- --post-data='%s' --header='Content-Type: application/json' http://fog-ollama:11434/api/generate 2>/dev/null`,
-		strings.ReplaceAll(payload, "'", `'\''`))
+	script := fmt.Sprintf(
+		`wget -q -O- --post-data='%s' --header='Content-Type: application/json' http://fog-ollama:11434/api/generate 2>/dev/null`,
+		shellPayload,
+	)
 
 	output, err := p.runHelperContainer(ctx, networkID, []string{"sh", "-c", script})
 	if err != nil {
@@ -289,15 +304,8 @@ func (p *LLMPlanner) runHelperContainer(ctx context.Context, networkID string, c
 			CPUQuota:  100_000, // 1 vCPU
 		},
 	}
-	netCfg := &network.NetworkingConfig{
-		EndpointsConfig: map[string]*network.EndpointSettings{
-			"fog-planner": {
-				NetworkID: networkID,
-			},
-		},
-	}
 
-	resp, err := p.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, "")
+	resp, err := p.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
 		return "", fmt.Errorf("create helper container: %w", err)
 	}
@@ -306,6 +314,12 @@ func (p *LLMPlanner) runHelperContainer(ctx context.Context, networkID string, c
 		defer rmCancel()
 		_ = p.cli.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
 	}()
+
+	if err := p.cli.NetworkConnect(ctx, networkID, resp.ID, &network.EndpointSettings{
+		Aliases: []string{"fog-helper"},
+	}); err != nil {
+		return "", fmt.Errorf("connect helper container to network: %w", err)
+	}
 
 	if err := p.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("start helper container: %w", err)
@@ -365,11 +379,12 @@ func (p *LLMPlanner) buildPrompt(languages []report.Language, configs map[string
 	b.WriteString("1. Return ONLY valid JSON, no explanation.\n")
 	b.WriteString("2. The JSON must be an array of objects with keys: language, image, script, output_format.\n")
 	b.WriteString("3. 'image' must be an official Docker Hub image (e.g. node:20-slim, golang:1.24-alpine).\n")
-	b.WriteString("4. 'script' must be a single shell command string that:\n")
-	b.WriteString("   a. Copies /repo to /workspace: cp -r /repo/. /workspace/ && cd /workspace\n")
-	b.WriteString("   b. Installs dependencies.\n")
-	b.WriteString("   c. Runs tests with coverage.\n")
-	b.WriteString("   d. Outputs '---COVERAGE_JSON---' followed by a JSON object with format: ")
+	b.WriteString("4. 'script' must be a JSON array of command and arguments, e.g. [\"sh\",\"-c\",\"...\"].\n")
+	b.WriteString("   The command must:\n")
+	b.WriteString("   a. Copy /repo to /workspace: cp -r /repo/. /workspace/ && cd /workspace\n")
+	b.WriteString("   b. Install dependencies.\n")
+	b.WriteString("   c. Run tests with coverage.\n")
+	b.WriteString("   d. Output '---COVERAGE_JSON---' followed by a JSON object with format: ")
 	b.WriteString(`{"total":{"lines":{"pct":N},"statements":{"pct":N},"branches":{"pct":N},"functions":{"pct":N}}}`)
 	b.WriteString("\n")
 	b.WriteString("5. 'output_format' must be 'jest-summary' for JS/TS/Go/Rust/PHP or 'jacoco-xml' for Java/Kotlin.\n")
@@ -425,18 +440,43 @@ func (p *LLMPlanner) parsePlans(raw string, languages []report.Language) ([]RunP
 		return nil, fmt.Errorf("LLM returned no plans")
 	}
 
-	// Validate each plan.
+	// Build a map of requested languages for O(1) lookup.
+	langRequested := make(map[report.Language]bool, len(languages))
+	for _, lang := range languages {
+		langRequested[lang] = false // false = not yet seen
+	}
+
+	// Validate each plan: allowed image, non-empty script, and valid output_format.
+	validFormats := map[string]bool{"jest-summary": true, "jacoco-xml": true}
 	for i := range plans {
 		if !isAllowedImage(plans[i].Image) {
 			return nil, fmt.Errorf("LLM suggested disallowed image %q for %s", plans[i].Image, plans[i].Language)
 		}
-		// Ensure Script is in the expected format.
 		if len(plans[i].Script) == 0 {
 			return nil, fmt.Errorf("LLM returned empty script for %s", plans[i].Language)
 		}
 		// If the LLM returned the script as a single string, wrap it.
 		if len(plans[i].Script) == 1 {
 			plans[i].Script = []string{"sh", "-c", plans[i].Script[0]}
+		}
+		if !validFormats[plans[i].OutputFormat] {
+			return nil, fmt.Errorf("LLM returned invalid output_format %q for %s", plans[i].OutputFormat, plans[i].Language)
+		}
+		// Check for unexpected or duplicate languages.
+		seen, exists := langRequested[plans[i].Language]
+		if !exists {
+			return nil, fmt.Errorf("LLM returned plan for unexpected language %s", plans[i].Language)
+		}
+		if seen {
+			return nil, fmt.Errorf("LLM returned duplicate plan for language %s", plans[i].Language)
+		}
+		langRequested[plans[i].Language] = true
+	}
+
+	// Ensure every requested language has a plan.
+	for lang, seen := range langRequested {
+		if !seen {
+			return nil, fmt.Errorf("LLM returned no plan for language %s", lang)
 		}
 	}
 

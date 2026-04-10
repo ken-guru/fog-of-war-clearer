@@ -115,18 +115,16 @@ cp -r /repo/. /workspace/
 cd /workspace
 apt-get update -qq && apt-get install -yqq git unzip libzip-dev > /dev/null 2>&1
 docker-php-ext-install zip > /dev/null 2>&1
+# Install Xdebug (required for PHPUnit coverage) and Composer.
+pecl install xdebug > /dev/null 2>&1 && docker-php-ext-enable xdebug > /dev/null 2>&1
 curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer > /dev/null 2>&1
 composer install --no-interaction --no-scripts 2>&1
 if [ -f "vendor/bin/phpunit" ]; then
   XDEBUG_MODE=coverage vendor/bin/phpunit --coverage-clover=coverage/clover.xml 2>&1
-  # Convert clover to jest-summary-like JSON.
-  total=$(grep -oP 'elements.*?covered="\K[0-9]+' coverage/clover.xml | head -1)
+  # Convert clover to jest-summary-like JSON using awk (no bc required).
+  covered=$(grep -oP 'elements.*?covered="\K[0-9]+' coverage/clover.xml | head -1)
   elements=$(grep -oP 'elements.*?count="\K[0-9]+' coverage/clover.xml | head -1)
-  if [ -n "$elements" ] && [ "$elements" -gt 0 ]; then
-    pct=$(echo "scale=2; $total * 100 / $elements" | bc)
-  else
-    pct=0
-  fi
+  pct=$(awk -v t="${covered:-0}" -v e="${elements:-0}" 'BEGIN{if(e>0) printf "%.2f",t*100/e; else print 0}')
   echo '---COVERAGE_JSON---'
   printf '{"total":{"lines":{"pct":%s},"statements":{"pct":%s},"branches":{"pct":0},"functions":{"pct":0}}}' "$pct" "$pct"
 else
