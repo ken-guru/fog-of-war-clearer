@@ -102,8 +102,21 @@ func (p *LLMPlanner) planWithLLM(ctx context.Context, repoDir string, languages 
 	ctx, cancel := context.WithTimeout(ctx, plannerTimeout)
 	defer cancel()
 
-	// 1. Create an ephemeral network.
-	networkName := fmt.Sprintf("fog-planner-%d", time.Now().UnixNano())
+	// Acquire a host-level exclusive lock so that concurrent fog processes
+	// cannot simultaneously write to the shared fog-ollama-models Docker volume.
+	// The lock blocks until any other fog LLM planner on this host has finished.
+	fmt.Fprintf(os.Stderr, "[fog] waiting for ollama lock...\n")
+	unlock, err := acquireOllamaLock()
+	if err != nil {
+		return nil, fmt.Errorf("acquire ollama lock: %w", err)
+	}
+	defer unlock()
+	fmt.Fprintf(os.Stderr, "[fog] ollama lock acquired\n")
+
+	// 1. Create an ephemeral network.  Include the process ID so that the name
+	// is unique across concurrent processes even if two calls land on the same
+	// nanosecond (which is theoretically possible on a busy host).
+	networkName := fmt.Sprintf("fog-planner-%d-%d", os.Getpid(), time.Now().UnixNano())
 	netResp, err := p.cli.NetworkCreate(ctx, networkName, network.CreateOptions{
 		Driver: "bridge",
 	})
