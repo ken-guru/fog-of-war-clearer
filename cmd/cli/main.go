@@ -81,10 +81,10 @@ func newAnalyzeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "analyze",
 		Short: "Run analysis checks against a GitHub repository",
-		Example: `  # Run default test-coverage check and print JSON to stdout
+		Example: `  # Run default test-coverage check and save to owner-name.json
   fog-of-war-clearer analyze --pat <PAT> --repo owner/name
 
-  # Run test-coverage and save results to a file
+  # Run test-coverage and save results to a custom file
   fog-of-war-clearer analyze --pat <PAT> --repo owner/name --output result.json
 
   # Specify checks explicitly
@@ -119,7 +119,7 @@ func newAnalyzeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&pat, "pat", "", "GitHub Personal Access Token for cloning the repository (can also use FOG_PAT env var)")
 	cmd.Flags().StringVar(&repo, "repo", "", "Repository to analyse in owner/name format (can also use FOG_REPO env var)")
 	cmd.Flags().StringSliceVar(&checks, "checks", []string{"test-coverage"}, "Comma-separated list of checks to run (can also use FOG_CHECKS env var)")
-	cmd.Flags().StringVar(&output, "output", "", "Write JSON output to this file (default: stdout)")
+	cmd.Flags().StringVar(&output, "output", "", "Write JSON output to this file (default: <owner>-<repo>.json)")
 
 	return cmd
 }
@@ -163,8 +163,8 @@ func runAnalyze(cmd *cobra.Command, pat, repo string, checkNames []string, outpu
 	}
 
 	if outputFile == "" {
-		fmt.Fprintln(cmd.OutOrStdout(), string(data))
-		return nil
+		// Generate default filename from repo (owner/repo-name → owner-repo-name.json)
+		outputFile = strings.ToLower(strings.ReplaceAll(repo, "/", "-")) + ".json"
 	}
 
 	if err := os.WriteFile(outputFile, data, 0o600); err != nil {
