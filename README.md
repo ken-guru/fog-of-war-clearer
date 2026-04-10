@@ -232,4 +232,7 @@ enough to run on a laptop CPU.
 **Parallel execution:**
 Multiple `fog-of-war-clearer` processes can run concurrently on different repositories.
 Each run is fully isolated — containers, networks, and temporary directories are unique per run.
-The shared model volume uses a check-before-pull optimization: after the first run, subsequent runs find the cached model and skip the pull entirely, enabling full parallelism with zero coordination overhead.
+The shared model volume uses a check-before-pull optimisation: after the first run, subsequent
+runs usually find the cached model and skip the pull entirely, avoiding repeated model downloads.
+Planning may still be briefly coordinated on the same host while the Ollama environment is
+prepared; once the model is cached, concurrent runs proceed independently.

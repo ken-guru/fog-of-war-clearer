@@ -61,8 +61,10 @@ func New() (*Runner, error) {
 	// Only probe Unix socket paths on non-Windows platforms.
 	if dockerHost == "" && runtime.GOOS != "windows" {
 		socketPaths := []string{
-			"/var/run/docker.sock",                                       // Linux default
-			filepath.Join(os.Getenv("HOME"), ".docker/run/docker.sock"), // macOS Docker Desktop
+			"/var/run/docker.sock", // Linux default
+		}
+		if home := os.Getenv("HOME"); home != "" {
+			socketPaths = append(socketPaths, filepath.Join(home, ".docker/run/docker.sock")) // macOS Docker Desktop
 		}
 
 		for _, socketPath := range socketPaths {
@@ -75,11 +77,16 @@ func New() (*Runner, error) {
 		// Docker client can use its own platform default.
 	}
 
-	var opts []client.Opt
+	// Always include FromEnv so that DOCKER_TLS_VERIFY, DOCKER_CERT_PATH,
+	// and DOCKER_API_VERSION are honoured.  WithHost overrides only the host
+	// portion when we have detected (or been given) a socket path.
+	opts := []client.Opt{
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
+	}
 	if dockerHost != "" {
 		opts = append(opts, client.WithHost(dockerHost))
 	}
-	opts = append(opts, client.WithAPIVersionNegotiation())
 
 	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {

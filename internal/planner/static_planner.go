@@ -18,59 +18,38 @@ var staticImages = map[report.Language]string{
 	report.LanguagePHP:        "php:8.3-cli",
 }
 
+// nodeScript is the shared shell script used for both TypeScript and JavaScript
+// coverage analysis.  Both languages use the same Node.js toolchain and test
+// runner detection logic, so they share a single definition to avoid drift.
+const nodeScript = `set -e
+cp -r /repo/. /workspace/
+cd /workspace
+if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+  npm ci --ignore-scripts --no-fund --no-audit 2>&1
+else
+  npm install --ignore-scripts --no-fund --no-audit 2>&1
+fi
+if npx --no -- jest --version > /dev/null 2>&1; then
+  npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
+  echo '---COVERAGE_JSON---'
+  cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
+elif npx --no -- vitest --version > /dev/null 2>&1; then
+  npm install --no-save --ignore-scripts @vitest/coverage-v8 2>&1
+  npx vitest run --coverage --coverage.reporter=json-summary 2>&1
+  echo '---COVERAGE_JSON---'
+  cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
+else
+  echo '---COVERAGE_JSON---'
+  echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
+fi`
+
 // staticScripts maps each supported language to the shell command run inside
 // the analysis container.  Every script copies /repo → /workspace, installs
 // deps, runs tests with coverage, and emits output that the corresponding
 // parser can consume.
 var staticScripts = map[report.Language][]string{
-	report.LanguageTypeScript: {
-		"sh", "-c",
-		`set -e
-cp -r /repo/. /workspace/
-cd /workspace
-if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-  npm ci --ignore-scripts --no-fund --no-audit 2>&1
-else
-  npm install --ignore-scripts --no-fund --no-audit 2>&1
-fi
-if npx --no -- jest --version > /dev/null 2>&1; then
-  npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
-  echo '---COVERAGE_JSON---'
-  cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
-elif npx --no -- vitest --version > /dev/null 2>&1; then
-  npm install --no-save --ignore-scripts @vitest/coverage-v8 2>&1
-  npx vitest run --coverage --coverage.reporter=json-summary 2>&1
-  echo '---COVERAGE_JSON---'
-  cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
-else
-  echo '---COVERAGE_JSON---'
-  echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
-fi`,
-	},
-	report.LanguageJavaScript: {
-		"sh", "-c",
-		`set -e
-cp -r /repo/. /workspace/
-cd /workspace
-if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-  npm ci --ignore-scripts --no-fund --no-audit 2>&1
-else
-  npm install --ignore-scripts --no-fund --no-audit 2>&1
-fi
-if npx --no -- jest --version > /dev/null 2>&1; then
-  npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
-  echo '---COVERAGE_JSON---'
-  cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
-elif npx --no -- vitest --version > /dev/null 2>&1; then
-  npm install --no-save --ignore-scripts @vitest/coverage-v8 2>&1
-  npx vitest run --coverage --coverage.reporter=json-summary 2>&1
-  echo '---COVERAGE_JSON---'
-  cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
-else
-  echo '---COVERAGE_JSON---'
-  echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
-fi`,
-	},
+	report.LanguageTypeScript: {"sh", "-c", nodeScript},
+	report.LanguageJavaScript: {"sh", "-c", nodeScript},
 	report.LanguageJava: {
 		"sh", "-c",
 		`set -e

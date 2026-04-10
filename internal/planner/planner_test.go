@@ -2,6 +2,8 @@ package planner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ken-guru/fog-of-war-clearer/pkg/report"
@@ -153,10 +155,13 @@ func TestDefaultLLMConfig(t *testing.T) {
 }
 
 func TestReadConfigFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n\ngo 1.24\n"), 0600); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
 	p := &LLMPlanner{}
-	// Use the current project directory which has a go.mod
-	configs := p.readConfigFiles("../../")
+	configs := p.readConfigFiles(dir)
 	if _, ok := configs["go.mod"]; !ok {
-		t.Error("expected go.mod to be read from project root")
+		t.Error("expected go.mod to be present in configs")
 	}
 }
