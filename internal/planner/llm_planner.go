@@ -132,13 +132,14 @@ func (p *LLMPlanner) planWithLLM(ctx context.Context, repoDir string, languages 
 		_ = p.cli.ContainerRemove(rmCtx, ollamaID, container.RemoveOptions{Force: true})
 	}()
 
-	// 4. Wait for Ollama to be ready.
-	if err := p.waitForOllama(ctx, ollamaID, netResp.ID); err != nil {
+	// 4. Wait for Ollama to be ready; capture the tags response for cache check.
+	tagsJSON, err := p.waitForOllama(ctx, ollamaID, netResp.ID)
+	if err != nil {
 		return nil, fmt.Errorf("ollama not ready: %w", err)
 	}
 
-	// 5. Pull the model if not already cached.
-	if err := p.pullModel(ctx, ollamaID, netResp.ID); err != nil {
+	// 5. Pull the model only if not already present in the volume.
+	if err := p.pullModel(ctx, ollamaID, netResp.ID, tagsJSON); err != nil {
 		return nil, fmt.Errorf("pull model: %w", err)
 	}
 
@@ -205,30 +206,58 @@ func (p *LLMPlanner) startOllama(ctx context.Context, networkID string) (string,
 }
 
 // waitForOllama polls the Ollama API via a helper container until it responds.
-func (p *LLMPlanner) waitForOllama(ctx context.Context, ollamaID, networkID string) error {
+// It returns the raw JSON body of the /api/tags response once Ollama is ready.
+func (p *LLMPlanner) waitForOllama(ctx context.Context, ollamaID, networkID string) (string, error) {
 	fmt.Fprintf(os.Stderr, "[fog] waiting for ollama to be ready...\n")
 
 	deadline := time.Now().Add(ollamaReadyTimeout)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return "", ctx.Err()
 		}
 		output, err := p.runHelperContainer(ctx, networkID, []string{
 			"sh", "-c",
-			`wget -q -O- http://fog-ollama:11434/api/tags 2>/dev/null && echo OK || echo FAIL`,
+			`wget -q -O- http://fog-ollama:11434/api/tags 2>/dev/null`,
 		})
-		if err == nil && strings.Contains(output, "OK") {
+		if err == nil && strings.Contains(output, `"models"`) {
 			fmt.Fprintf(os.Stderr, "[fog] ollama is ready\n")
-			return nil
+			return output, nil
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("ollama did not become ready within %s", ollamaReadyTimeout)
+	return "", fmt.Errorf("ollama did not become ready within %s", ollamaReadyTimeout)
 }
 
-// pullModel instructs Ollama to pull the configured model.
-func (p *LLMPlanner) pullModel(ctx context.Context, ollamaID, networkID string) error {
+// modelCached reports whether the named model is already present in the Ollama
+// instance, based on the JSON body returned by /api/tags.
+func modelCached(tagsJSON, model string) bool {
+	var resp struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(tagsJSON), &resp); err != nil {
+		return false
+	}
+	// Ollama may store the name with or without a tag suffix (e.g. "qwen2.5:1.5b").
+	for _, m := range resp.Models {
+		if m.Name == model || strings.HasPrefix(m.Name, model+":") {
+			return true
+		}
+	}
+	return false
+}
+
+// pullModel ensures the configured model is available in this Ollama instance.
+// It checks /api/tags first; if the model is already cached it skips the pull
+// entirely so that parallel fog runs can proceed without queuing.
+func (p *LLMPlanner) pullModel(ctx context.Context, ollamaID, networkID, tagsJSON string) error {
 	fmt.Fprintf(os.Stderr, "[fog] ensuring model %s is available...\n", p.config.Model)
+
+	if modelCached(tagsJSON, p.config.Model) {
+		fmt.Fprintf(os.Stderr, "[fog] model %s ready (cached)\n", p.config.Model)
+		return nil
+	}
 
 	payload := fmt.Sprintf(`{"name":"%s"}`, p.config.Model)
 	script := fmt.Sprintf(`wget -q -O- --post-data='%s' --header='Content-Type: application/json' http://fog-ollama:11434/api/pull 2>&1; echo`, payload)
