@@ -1,6 +1,7 @@
 # Binaries
 fog-of-war-clearer
 fog-of-war-clearer-server
+cli
 bin/
 
 # Build output
