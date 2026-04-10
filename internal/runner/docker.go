@@ -22,11 +22,10 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -148,9 +147,9 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 	}
 
 	cfg := &container.Config{
-		Image:       opts.Image,
-		Cmd:         opts.Cmd,
-		WorkingDir:  "/workspace",
+		Image:        opts.Image,
+		Cmd:          opts.Cmd,
+		WorkingDir:   "/workspace",
 		AttachStdout: true,
 		AttachStderr: true,
 	}
@@ -158,7 +157,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 	hostCfg := &container.HostConfig{
 		Mounts:      mounts,
 		NetworkMode: container.NetworkMode("bridge"), // allow network for package installation; PAT stays on host
-		AutoRemove:  false,  // we remove manually to collect logs first
+		AutoRemove:  false,                           // we remove manually to collect logs first
 		Resources: container.Resources{
 			Memory:    memoryLimit,
 			CPUPeriod: cpuPeriod,
@@ -167,7 +166,10 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 		SecurityOpt: []string{"no-new-privileges"},
 	}
 
-	resp, err := r.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
+	resp, err := r.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     cfg,
+		HostConfig: hostCfg,
+	})
 	if err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}
@@ -176,16 +178,16 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 	defer func() {
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
-		_ = r.cli.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
+		_, _ = r.cli.ContainerRemove(rmCtx, resp.ID, client.ContainerRemoveOptions{Force: true})
 	}()
 
 	fmt.Fprintf(os.Stderr, "[fog] starting container (%s)...\n", opts.Image)
-	if err := r.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := r.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return "", fmt.Errorf("start container: %w", err)
 	}
 
 	// Stream logs while waiting for the container to exit.
-	logStream, err := r.cli.ContainerLogs(ctx, resp.ID, container.LogsOptions{
+	logStream, err := r.cli.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
@@ -204,13 +206,15 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 	}
 
 	// Wait for exit status.
-	statusCh, errCh := r.cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	waitResult := r.cli.ContainerWait(ctx, resp.ID, client.ContainerWaitOptions{
+		Condition: container.WaitConditionNotRunning,
+	})
 	select {
-	case waitErr := <-errCh:
+	case waitErr := <-waitResult.Error:
 		if waitErr != nil {
 			return buf.String(), fmt.Errorf("wait for container: %w", waitErr)
 		}
-	case status := <-statusCh:
+	case status := <-waitResult.Result:
 		if status.StatusCode != 0 {
 			output := buf.String()
 			if output != "" {
@@ -227,11 +231,11 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (string, error) {
 
 // pullIfMissing pulls an image if it is not already present on the daemon.
 func (r *Runner) pullIfMissing(ctx context.Context, imageName string) error {
-	images, err := r.cli.ImageList(ctx, image.ListOptions{})
+	images, err := r.cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return fmt.Errorf("list images: %w", err)
 	}
-	for _, img := range images {
+	for _, img := range images.Items {
 		for _, tag := range img.RepoTags {
 			if tag == imageName {
 				return nil // already present
@@ -240,7 +244,7 @@ func (r *Runner) pullIfMissing(ctx context.Context, imageName string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "[fog] pulling docker image %s...\n", imageName)
-	out, err := r.cli.ImagePull(ctx, imageName, image.PullOptions{})
+	out, err := r.cli.ImagePull(ctx, imageName, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", imageName, err)
 	}
