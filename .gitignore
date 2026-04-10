@@ -21,8 +21,12 @@ coverage.txt
 /tmp/
 *.tmp
 
-# Analysis results
+# Analysis results (default directory written by the CLI)
 results/
+
+# Belt-and-suspenders: any JSON file dropped at the workspace root
+# (e.g. from a stale binary that predates the results/ default).
+/*.json
 
 # IDE
 .idea/
