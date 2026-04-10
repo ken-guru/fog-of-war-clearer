@@ -274,8 +274,11 @@ func (p *LLMPlanner) queryOllama(ctx context.Context, repoDir, networkID, prompt
 	// only character that needs escaping for the shell is a single quote.
 	shellPayload := strings.ReplaceAll(string(payloadBytes), "'", `'\''`)
 
+	// -T 300: allow up to 5 minutes for the model to generate a response.
+	// Without an explicit timeout BusyBox wget uses a short default that fires
+	// before qwen2.5:1.5b finishes generating, causing an empty response body.
 	script := fmt.Sprintf(
-		`wget -q -O- --post-data='%s' --header='Content-Type: application/json' http://fog-ollama:11434/api/generate 2>/dev/null`,
+		`wget -q -T 300 -O- --post-data='%s' --header='Content-Type: application/json' http://fog-ollama:11434/api/generate 2>/dev/null`,
 		shellPayload,
 	)
 
@@ -390,7 +393,7 @@ func (p *LLMPlanner) buildPrompt(languages []report.Language, configs map[string
 	b.WriteString("5. 'output_format' must be 'jest-summary' for JS/TS/Go/Rust/PHP or 'jacoco-xml' for Java/Kotlin.\n")
 	b.WriteString("6. For npm projects, use --ignore-scripts for security.\n")
 	b.WriteString("7. Detect the correct test runner from package.json (jest, vitest, mocha, etc.) and use version-appropriate flags.\n")
-	b.WriteString("8. If vitest is detected, do NOT use --poolOptions flag — just use 'npx vitest run --coverage'.\n\n")
+	b.WriteString("8. If vitest is detected, do NOT use --poolOptions flag — use 'npx vitest run --coverage --coverage.reporter=json-summary'.\n\n")
 
 	b.WriteString("DETECTED LANGUAGES: ")
 	for i, lang := range languages {

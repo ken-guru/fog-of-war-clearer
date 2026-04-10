@@ -34,7 +34,8 @@ if npx --no -- jest --version > /dev/null 2>&1; then
   echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 elif npx --no -- vitest --version > /dev/null 2>&1; then
-  npx vitest run --coverage 2>&1
+  npm install --no-save --ignore-scripts @vitest/coverage-v8 2>&1
+  npx vitest run --coverage --coverage.reporter=json-summary 2>&1
   echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 else
@@ -53,7 +54,8 @@ if npx --no -- jest --version > /dev/null 2>&1; then
   echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 elif npx --no -- vitest --version > /dev/null 2>&1; then
-  npx vitest run --coverage 2>&1
+  npm install --no-save --ignore-scripts @vitest/coverage-v8 2>&1
+  npx vitest run --coverage --coverage.reporter=json-summary 2>&1
   echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 else
