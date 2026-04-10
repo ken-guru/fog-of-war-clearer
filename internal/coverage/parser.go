@@ -22,8 +22,17 @@ import (
 //	    "functions": {"pct": 90.0}
 //	  }
 //	}
+// coverageJSONSentinel is emitted by the analysis scripts immediately before
+// the coverage-summary.json content.  It lets the parser skip all preceding
+// test and npm output unambiguously.
+const coverageJSONSentinel = "---COVERAGE_JSON---"
+
 func ParseJestSummary(lang report.Language, raw string) (report.CoverageMetrics, error) {
-	// Jest may print log output before the JSON; find the first '{'.
+	// Prefer the sentinel marker inserted by our script; fall back to the first
+	// '{' for backwards compatibility.
+	if markerIdx := strings.Index(raw, coverageJSONSentinel); markerIdx >= 0 {
+		raw = raw[markerIdx+len(coverageJSONSentinel):]
+	}
 	idx := strings.Index(raw, "{")
 	if idx < 0 {
 		return report.CoverageMetrics{}, fmt.Errorf("no JSON object found in jest output")

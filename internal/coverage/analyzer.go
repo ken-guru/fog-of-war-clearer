@@ -35,11 +35,14 @@ cd /workspace
 npm ci --ignore-scripts --no-fund --no-audit 2>&1
 if npx --no -- jest --version > /dev/null 2>&1; then
   npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
+  echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 elif npx --no -- vitest --version > /dev/null 2>&1; then
   npx vitest run --coverage --pool=threads --poolOptions.threads.maxThreads=2 2>&1
+  echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 else
+  echo '---COVERAGE_JSON---'
   echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
 fi`,
 	},
@@ -51,11 +54,14 @@ cd /workspace
 npm ci --ignore-scripts --no-fund --no-audit 2>&1
 if npx --no -- jest --version > /dev/null 2>&1; then
   npx jest --coverage --coverageReporters=json-summary --passWithNoTests --maxWorkers=2 --forceExit 2>&1
+  echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 elif npx --no -- vitest --version > /dev/null 2>&1; then
   npx vitest run --coverage --pool=threads --poolOptions.threads.maxThreads=2 2>&1
+  echo '---COVERAGE_JSON---'
   cat coverage/coverage-summary.json 2>/dev/null || echo '{}'
 else
+  echo '---COVERAGE_JSON---'
   echo '{"total":{"lines":{"pct":0},"statements":{"pct":0},"branches":{"pct":0},"functions":{"pct":0}}}'
 fi`,
 	},
