@@ -10,13 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/ken-guru/fog-of-war-clearer/pkg/report"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -117,7 +116,7 @@ func (p *LLMPlanner) planWithLLM(ctx context.Context, repoDir string, languages 
 	// is unique across concurrent processes even if two calls land on the same
 	// nanosecond (which is theoretically possible on a busy host).
 	networkName := fmt.Sprintf("fog-planner-%d-%d", os.Getpid(), time.Now().UnixNano())
-	netResp, err := p.cli.NetworkCreate(ctx, networkName, network.CreateOptions{
+	netResp, err := p.cli.NetworkCreate(ctx, networkName, client.NetworkCreateOptions{
 		Driver: "bridge",
 	})
 	if err != nil {
@@ -126,7 +125,7 @@ func (p *LLMPlanner) planWithLLM(ctx context.Context, repoDir string, languages 
 	defer func() {
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
-		_ = p.cli.NetworkRemove(rmCtx, netResp.ID)
+		_, _ = p.cli.NetworkRemove(rmCtx, netResp.ID, client.NetworkRemoveOptions{})
 	}()
 
 	// 2. Pull Ollama image if needed.
@@ -142,7 +141,7 @@ func (p *LLMPlanner) planWithLLM(ctx context.Context, repoDir string, languages 
 	defer func() {
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
-		_ = p.cli.ContainerRemove(rmCtx, ollamaID, container.RemoveOptions{Force: true})
+		_, _ = p.cli.ContainerRemove(rmCtx, ollamaID, client.ContainerRemoveOptions{Force: true})
 	}()
 
 	// 4. Wait for Ollama to be ready; capture the tags response for cache check.
@@ -197,20 +196,26 @@ func (p *LLMPlanner) startOllama(ctx context.Context, networkID string) (string,
 		},
 	}
 
-	resp, err := p.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
+	resp, err := p.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     cfg,
+		HostConfig: hostCfg,
+	})
 	if err != nil {
 		return "", fmt.Errorf("create ollama container: %w", err)
 	}
 
-	if err := p.cli.NetworkConnect(ctx, networkID, resp.ID, &network.EndpointSettings{
-		Aliases: []string{"fog-ollama"},
+	if _, err := p.cli.NetworkConnect(ctx, networkID, client.NetworkConnectOptions{
+		Container: resp.ID,
+		EndpointConfig: &network.EndpointSettings{
+			Aliases: []string{"fog-ollama"},
+		},
 	}); err != nil {
-		_ = p.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		_, _ = p.cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("connect ollama container to network: %w", err)
 	}
 
-	if err := p.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		_ = p.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+	if _, err := p.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = p.cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("start ollama container: %w", err)
 	}
 
@@ -350,39 +355,47 @@ func (p *LLMPlanner) runHelperContainer(ctx context.Context, networkID string, c
 		},
 	}
 
-	resp, err := p.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
+	resp, err := p.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     cfg,
+		HostConfig: hostCfg,
+	})
 	if err != nil {
 		return "", fmt.Errorf("create helper container: %w", err)
 	}
 	defer func() {
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer rmCancel()
-		_ = p.cli.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
+		_, _ = p.cli.ContainerRemove(rmCtx, resp.ID, client.ContainerRemoveOptions{Force: true})
 	}()
 
-	if err := p.cli.NetworkConnect(ctx, networkID, resp.ID, &network.EndpointSettings{
-		Aliases: []string{"fog-helper"},
+	if _, err := p.cli.NetworkConnect(ctx, networkID, client.NetworkConnectOptions{
+		Container: resp.ID,
+		EndpointConfig: &network.EndpointSettings{
+			Aliases: []string{"fog-helper"},
+		},
 	}); err != nil {
 		return "", fmt.Errorf("connect helper container to network: %w", err)
 	}
 
-	if err := p.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := p.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return "", fmt.Errorf("start helper container: %w", err)
 	}
 
-	statusCh, errCh := p.cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	waitResult := p.cli.ContainerWait(ctx, resp.ID, client.ContainerWaitOptions{
+		Condition: container.WaitConditionNotRunning,
+	})
 	select {
-	case err := <-errCh:
+	case err := <-waitResult.Error:
 		if err != nil {
 			return "", fmt.Errorf("wait for helper: %w", err)
 		}
-	case status := <-statusCh:
+	case status := <-waitResult.Result:
 		_ = status // we read output regardless of exit code
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
 
-	logReader, err := p.cli.ContainerLogs(ctx, resp.ID, container.LogsOptions{
+	logReader, err := p.cli.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 	})
@@ -540,11 +553,11 @@ func isAllowedImage(img string) bool {
 
 // pullIfMissing pulls an image if it is not present locally.
 func (p *LLMPlanner) pullIfMissing(ctx context.Context, imageName string) error {
-	images, err := p.cli.ImageList(ctx, image.ListOptions{})
+	images, err := p.cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return fmt.Errorf("list images: %w", err)
 	}
-	for _, img := range images {
+	for _, img := range images.Items {
 		for _, tag := range img.RepoTags {
 			if tag == imageName {
 				return nil
@@ -553,7 +566,7 @@ func (p *LLMPlanner) pullIfMissing(ctx context.Context, imageName string) error 
 	}
 
 	fmt.Fprintf(os.Stderr, "[fog] pulling image %s...\n", imageName)
-	out, err := p.cli.ImagePull(ctx, imageName, image.PullOptions{})
+	out, err := p.cli.ImagePull(ctx, imageName, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", imageName, err)
 	}
