@@ -21,6 +21,30 @@ that repository code never runs with access to your Personal Access Token (PAT).
 
 ---
 
+## How it works
+
+```mermaid
+graph TD
+    A["User Input<br/>(PAT, Repo)"] -->|CLI or REST API| B["fog-of-war-clearer<br/>Main Process"]
+    B -->|Secure<br/>git clone| C["GitHub<br/>Repository<br/>(PAT secured)"]
+    C -->|Clone to<br/>host filesystem| D["Repository<br/>Files"]
+    D -->|LLM Planner<br/>or Static Config| E["Determine<br/>Build/Test<br/>Strategy"]
+    E -->|Launch<br/>Sandboxed| F["Docker Container<br/>(No PAT access)"]
+    F -->|Run tests &<br/>collect coverage| G["Test Execution<br/>& Analysis"]
+    G -->|Generate| H["Coverage<br/>Report"]
+    H -->|Structured| I["JSON Report<br/>with Metrics"]
+    I -->|Return results| J["Output<br/>CLI or API Response"]
+
+    style A fill:#e1f5ff
+    style B fill:#fff3e0
+    style C fill:#e8f5e9
+    style F fill:#f3e5f5
+    style I fill:#fce4ec
+    style J fill:#e0f2f1
+```
+
+---
+
 ## Supported checks
 
 | Check | Flag / JSON key | Default |
